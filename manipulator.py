@@ -188,7 +188,7 @@ class Manipulator:
 
         link1 = np.array([[-400], [60]])
         link2 = np.array([[400], [60]])
-        jointTrajectory = np.reshape(jointTrajectory, (2, -1))
+        # jointTrajectory = np.reshape(jointTrajectory, (2, -1))
         endPos = np.zeros(np.shape(jointTrajectory))
 
         for i in range(np.size(jointTrajectory, 1)):
