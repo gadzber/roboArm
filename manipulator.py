@@ -15,9 +15,10 @@ class Manipulator:
         self.c1 = moteus.Controller(id=1)
         self.startMotorPos = np.zeros([2, 1])
         self.currentMotorPos = np.zeros([2, 1])
+        self.currentMotorTorque = np.zeros([2, 1])
         self.currentJointPos = np.zeros([2, 1])
 
-        self.jacobianJointToMotor = np.array([[1, 0], [0.2, -1]]) / (2 * np.pi) * 20
+        self.jacobianJointToMotor = np.array([[-1, 0], [-0.2, 1]]) / (2 * np.pi) * 20
         self.jacobianMotorToJoint = inv(self.jacobianJointToMotor)
 
         # Trajectory queue
@@ -29,77 +30,87 @@ class Manipulator:
         self.desJointTrajectoryPos = self.currentJointPos
         self.desJointTrajectoryVel = np.zeros([2, 1])
         self.desJointTrajectoryTorque = np.zeros([2, 1])
+        self.desMotorTrajectoryPos = np.zeros([2, 1])
+        self.desMotorTrajectoryTorque = np.zeros([2, 1])
 
-        # asyncio.run(self.connect())
+        # await self.moteus_connect()
 
     async def moteus_connect(self):
 
         await self.c1.set_stop()
         await self.c2.set_stop()
 
-        state1 = await self.c1.set_position(position=math.nan, query=True)
-        state2 = await self.c2.set_position(position=math.nan, query=True)
+        state1 = await self.c1.set_position(position=math.nan, maximum_torque=0.0, query=True)
+        state2 = await self.c2.set_position(position=math.nan, maximum_torque=0.0, query=True)
+
+        await self.c1.set_stop()
+        await self.c2.set_stop()
 
         self.startMotorPos[0] = state1.values[moteus.Register.POSITION]
         self.startMotorPos[1] = state2.values[moteus.Register.POSITION]
 
         print("Moteus connected")
+        print(self.startMotorPos)
+        return
 
-    async def moteus_get_pos(self):
-        state1 = await self.c1.set_position(position=math.nan, query=True)
-        state2 = await self.c2.set_position(position=math.nan, query=True)
+    async def moteus_set_pos(self, desMotorPos, desMotorTorque):
 
-        self.currentMotorPos = np.array(
+        state1 = await self.c1.set_position(position=desMotorPos[0], feedforward_torque=0,
+                                            maximum_torque=0.3, query=True)
+        state2 = await self.c2.set_position(position=desMotorPos[1], feedforward_torque=0,
+                                            maximum_torque=0.3, query=True)
+
+        currentMotorPos = np.array(
             [state1.values[moteus.Register.POSITION], state2.values[moteus.Register.POSITION]]).T
-        self.currentJointPos = self.jacobianMotorToJoint @ self.currentMotorPos
+        currentMotorTorque = np.array(
+            [state1.values[moteus.Register.TORQUE], state2.values[moteus.Register.TORQUE]]).T
 
-    async def moteus_set_pos(self, desJointPos):
-
-        desMotorPos = self.jacobianJointToMotor @ desJointPos + self.startMotorPos
-
-        state1 = await self.c1.set_position(position=desMotorPos[0], query=True)
-        state2 = await self.c2.set_position(position=desMotorPos[1], query=True)
-
-        self.currentMotorPos = np.array(
-            [state1.values[moteus.Register.POSITION], state2.values[moteus.Register.POSITION]]).T
-        self.currentJointPos = self.jacobianMotorToJoint @ (self.currentMotorPos - self.startMotorPos)
-
-    async def moteus_set_pos_feedforward(self, desJointPos, desJointVel, desJointTorque):
-        desMotorPos = self.jacobianJointToMotor @ desJointPos + self.startMotorPos
-        desMotorVel = self.jacobianJointToMotor @ desJointVel
-
-        state1 = await self.c1.set_position(position=desMotorPos[0],
-                                            velocity=desMotorVel[0],
-                                            feedforward_torque=desJointTorque[0],
-                                            query=True)
-        state2 = await self.c1.set_position(position=desMotorPos[1],
-                                            velocity=desJointVel[1],
-                                            feedforward_torque=desJointTorque[1],
-                                            query=True)
-
-        self.currentMotorPos = np.array(
-            [state1.values[moteus.Register.POSITION], state2.values[moteus.Register.POSITION]]).T
-        self.currentJointPos = self.jacobianMotorToJoint @ (self.currentMotorPos - self.startMotorPos)
+        return currentMotorPos, currentMotorTorque
 
     async def moteus_play_trajectory(self):
+        # get starting time
         startTime = time.perf_counter_ns()
+
+        # calculate step time in nanoseconds
         timeInterval_ns = int(self.trajectoryTimeInterval * 1e9)
+
+        # number of steps
         n = np.size(self.desJointTrajectoryPos, 1)
 
+        # prepare matrices for telemetry
+        self.currentMotorTorque = np.zeros((2, n))
+        self.currentMotorPos = np.zeros((2, n))
+
+        # convert joint trajectory to motor trajectory including starting point
+        self.desMotorTrajectoryPos = self.jacobianJointToMotor @ self.desJointTrajectoryPos + self.startMotorPos
+
+        # range of timestamps during trajectory
         expected_time = range(startTime, startTime + n * timeInterval_ns, timeInterval_ns)
 
         for i in range(n):
-            # Send desired joint positions to Moteus
-            desJointTrajectoryPos = np.array([[self.desJointTrajectoryPos[0, i]], [self.desJointTrajectoryPos[1, i]]])
-            await self.moteus_set_pos(desJointTrajectoryPos)
+            # prepare data to send
+            desMotorPos = self.desMotorTrajectoryPos[:, i]
+            desMotorTorque = self.desJointTrajectoryTorque[:, i]/20  # todo: include joint ratios
+
+            # set position and read telemetry
+            currentMotorPos, currentMotorTorque = await self.moteus_set_pos(desMotorPos, desMotorTorque)
+
+            # save telemetry
+            self.currentMotorPos[:, i] = currentMotorPos
+            self.currentMotorTorque[:, i] = currentMotorTorque
 
             # Wait
             expected_time_current = expected_time[i]
             while (time.perf_counter_ns() < expected_time_current):
                 pass
 
+        # release motors
         await self.c1.set_stop()
         await self.c2.set_stop()
+
+        # convert motor positions to joint positions
+        # todo: torques
+        self.currentJointPos = self.jacobianMotorToJoint @ (self.currentMotorPos - self.startMotorPos)
 
     async def moteus_goto_joint(self, desJointPos, duration=2, dt=0.01):
         # Update current motor positions
@@ -111,8 +122,6 @@ class Manipulator:
 
         desiredMotorPos = self.jacobianJointToMotor @ desJointPos
         self.trajectoryMotorPos = self.currentMotorPos + (desiredMotorPos - self.currentMotorPos) @ profile
-        # self.trajectoryMotorVel = np.zeros(np.shape(self.trajectoryMotorPos))
-        # self.trajectoryMotorTorque = np.zeros(np.shape(self.trajectoryMotorPos))
 
         await self.moteus_play_trajectory()
 
@@ -186,8 +195,8 @@ class Manipulator:
 
     def calc_FK(self, jointTrajectory):
 
-        link1 = np.array([[-400], [60]])
-        link2 = np.array([[400], [60]])
+        link1 = np.array([[-0.400], [0.060]])
+        link2 = np.array([[0.400], [0.060]])
         # jointTrajectory = np.reshape(jointTrajectory, (2, -1))
         endPos = np.zeros(np.shape(jointTrajectory))
 
@@ -204,10 +213,10 @@ class Manipulator:
 
     def calc_IK(self, cartesianTrajectory):
 
-        a1 = np.sqrt(400 ** 2 + 60 ** 2)
-        a2 = np.sqrt(400 ** 2 + 60 ** 2)
-        th1 = np.arctan2(60, -400)
-        th2 = np.arctan2(60, 400)
+        a1 = np.sqrt(0.400 ** 2 + 0.060 ** 2)
+        a2 = np.sqrt(0.400 ** 2 + 0.060 ** 2)
+        th1 = np.arctan2(0.060, -0.400)
+        th2 = np.arctan2(0.060, 0.400)
 
         angles = np.zeros(np.shape(cartesianTrajectory))
 
@@ -246,19 +255,20 @@ class Manipulator:
 
         return angles
 
-
     def calc_profile(self, n):
         profile = np.zeros([1, n])
         x = np.linspace(0, 1, n)
 
-        profile[0, :] = -2 * x[:] ** 3 + 3 * x[:] ** 2
+        # profile[0, :] = -2 * x[:] ** 3 + 3 * x[:] ** 2
+        profile[0, :] = 6 * x[:] ** 5 - 15 * x[:] ** 4 + 10 * x[:] ** 3
         return profile
 
     def plot_robot(self):
         fig, ax = plt.subplots()
-
-        ax.axis([-600, 600, -200, 1000])
         plt.ion()
+
+        ax.axis([-0.600, 0.600, -0.200, 1.000])
+        plot1 = ax.plot(0, 0)
         plt.show()
 
         for i in range(np.size(self.desJointTrajectoryPos, 1)):
@@ -267,8 +277,8 @@ class Manipulator:
             rot1 = np.array([[np.cos(q1), -np.sin(q1)], [np.sin(q1), np.cos(q1)]])
             rot2 = np.array([[np.cos(q1 + q2), -np.sin(q1 + q2)], [np.sin(q1 + q2), np.cos(q1 + q2)]])
 
-            link1 = np.array([[0, -400, -400], [0, 0, 60]])
-            link2 = np.array([[0, 400, 400], [0, 0, 60]])
+            link1 = np.array([[0, -0.400, -0.400], [0, 0, 0.060]])
+            link2 = np.array([[0, 0.400, 0.400], [0, 0, 0.060]])
 
             link1new = rot1 @ link1
             link2new = rot2 @ link2 + link1new[:, [-1]]
@@ -280,9 +290,9 @@ class Manipulator:
             ax.plot(link1new[0, -1], link1new[1, -1], 'ro')
             ax.plot(link2new[0, -1], link2new[1, -1], 'ro')
 
-            ax.axis([-600, 600, -200, 1000])
+            ax.axis([-0.600, 0.600, -0.200, 1.000])
             # ax.axis('equal')
             ax.grid('on')
 
-            plt.draw()
-            plt.pause(0.0001)
+            fig.canvas.draw()
+            fig.canvas.flush_events()

@@ -1,68 +1,64 @@
+# Import Libraries
 import dynamics
 import numpy as np
 from manipulator import Manipulator as man
+import asyncio
 import matplotlib.pyplot as plt
 
+# Initialize robot and dynamics
 arm = man()
-
-chain=dynamics.Chain()
+asyncio.run(arm.moteus_connect())
+chain = dynamics.Chain()
 
 # First link
 chain.appendLink(prevLink=-1,
                  prevLinkJointPosition=[0, 0, 0],
                  prevLinkJointAxis=[0, 0, 1],
                  prevLinkJointType='revolute',
-                 linkMass=2,
-                 linkCoM=[-200, 30, 0],
+                 linkMass=0.727,
+                 linkCoM=[-0.208, 0.028, 0],
                  linkInertiaXX=0,
                  linkInertiaYY=0,
-                 linkInertiaZZ=0,
+                 linkInertiaZZ=1.467E-02,
                  linkInertiaXY=0,
                  linkInertiaYZ=0,
                  linkInertiaZX=0)
 # Second link
 chain.appendLink(prevLink=0,
-                 prevLinkJointPosition=[-400, 60, 0],
+                 prevLinkJointPosition=[-0.400, 0.060, 0],
                  prevLinkJointAxis=[0, 0, 1],
                  prevLinkJointType='revolute',
-                 linkMass=2,
-                 linkCoM=[200, 30, 0],
+                 linkMass=0.603,
+                 linkCoM=[-0.213 + 0.400, 0.09 - 0.06, 0],
                  linkInertiaXX=0,
                  linkInertiaYY=0,
-                 linkInertiaZZ=0,
+                 linkInertiaZZ=1.243E-02,
                  linkInertiaXY=0,
                  linkInertiaYZ=0,
                  linkInertiaZX=0)
 
-chain.appendLinkPoint(link=0,pointPositionLink=chain.Links[0].linkCoM,DoF=2)
-chain.appendLinkPoint(link=1,pointPositionLink=chain.Links[1].linkCoM,DoF=2)
-chain.appendLinkPoint(link=1, pointPositionLink=[400, 60, 0], DoF=2)
+chain.appendLinkPoint(link=0, pointPositionLink=chain.Links[0].linkCoM, DoF=2)
+chain.appendLinkPoint(link=1, pointPositionLink=chain.Links[1].linkCoM, DoF=2)
+chain.appendLinkPoint(link=1, pointPositionLink=[0.400, 0.060, 0], DoF=2)
 
-t = np.linspace(0,np.pi,1000)
-Q = np.array([np.sin(t),np.sin(2*t)])
-pos1 = arm.calc_FK(jointTrajectory=Q)
-pos2 = pos1*0
+# PLanning Cartesian trajectory
+arm.calc_trajectory_cartesian_lin(np.array([[0.0], [0.120]]), duration=0.1)
+arm.calc_trajectory_cartesian_lin(np.array([[0.150], [0.300]]), duration=2)
+arm.calc_trajectory_cartesian_circle2(np.array([[0.150], [0.450]]), duration=8)
+arm.calc_trajectory_cartesian_lin(np.array([[0], [0.120]]), duration=2)
 
-for i in range(np.size(Q,1)):
-    q = Q[:,i]
-    chain.calcCurrentPositions(q)
-    pos = chain.Points[0].pointPositionWorld
-    pos2[:,i] = pos[0:2,0]
+# Calculate Joint torques
+Q = arm.desJointTrajectoryPos
+desJointTorque, desMotorTorque = chain.calcInverseDynamics(Q)
+arm.desJointTrajectoryTorque = desJointTorque
+arm.desMotorTrajectoryTorque = desMotorTorque
 
-delta = np.abs(pos1-pos2)
-print(np.max(delta))
-
-desJointTorque = chain.calcInverseDynamics(Q)
-desJointTorque[:,[-1]] = np.zeros((2,1))
-desJointTorque[:,[-2]] = np.zeros((2,1))
-
-plt.plot(np.transpose(desJointTorque))
-plt.show()
-
-# plt.plot(np.transpose(delta))
+# Postprocessing
+# arm.plot_robot()
+# plt.plot(np.transpose(desJointTorque))
 # plt.show()
+asyncio.run(arm.moteus_play_trajectory())
 
-# chain.calcCurrentPositions(np.zeros((2,1)))
-# print(chain.Points[0].jacobianMatrix)
-
-
+# plt.plot(np.rad2deg(np.transpose(Q) - arm.currentJointPos.T))
+# plt.plot(arm.desMotorTrajectoryTorque.T)
+# plt.show()

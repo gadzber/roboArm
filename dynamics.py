@@ -45,6 +45,7 @@ class Chain:
         self.Links = []
         self.Points = []
         self.DoF = 0
+        self.dt = 0.01
 
     def appendLink(self, **kwargs):
         self.Links.append(Link(**kwargs))
@@ -102,9 +103,11 @@ class Chain:
         desCartesianTrajectoryAcc = np.zeros((6 * numOfPoints, N))
 
         desJointTorque = np.zeros((self.DoF, N))
+        desMotorTorque = np.zeros((self.DoF, N))
 
         # First: calculate first order differential of joint positions
-        desJointTrajectoryVel = np.diff(desJointTrajectoryPos, n=1, axis=1, append=np.zeros((self.DoF, 2)))
+        desJointTrajectoryVel = np.zeros((self.DoF, N))
+        desJointTrajectoryVel[:, 0:N - 1] = np.diff(desJointTrajectoryPos, n=1, axis=1) / self.dt
 
         # Second: calculate Forward Kinematics, jacobian and cartesian velocities
         for i in range(N):
@@ -120,15 +123,15 @@ class Chain:
 
             desCartesianTrajectoryVel[:, [i]] = jacobian @ jointVel
 
-
         # Third: numerically different velocities to get  and accelerations
-        desCartesianTrajectoryAcc = np.diff(desCartesianTrajectoryVel, n=1, axis=1, append=np.zeros((6*numOfPoints, 1)))
+        desCartesianTrajectoryAcc = np.zeros((6 * numOfPoints, N))
+        desCartesianTrajectoryAcc[:, 0:N - 1] = np.diff(desCartesianTrajectoryVel, n=1, axis=1) / self.dt
 
         # Fourth: calculate joint torques
-        grav = np.array([[0], [0], [-9.81]])
+        grav = np.array([[0], [-9.81], [0]])
         for i in range(N):
             cartesianForces = np.zeros((6 * numOfPoints, 1))
-            jacobian =np.zeros((6 * numOfPoints, self.DoF))
+            jacobian = np.zeros((6 * numOfPoints, self.DoF))
 
             # calculate current inertial and gravity forces
             for j in range(numOfPoints - 1):
@@ -140,8 +143,9 @@ class Chain:
                 accAng = desCartesianTrajectoryAcc[6 * j + 3:6 * j + 6, [i]]
                 velAng = desCartesianTrajectoryVel[6 * j + 3:6 * j + 6, [i]]
 
-                cartesianForces[6 * j:6 * j + 3, [0]] = mass * (accLin + grav)
-                cartesianForces[(6 * j + 3):(6 * j + 6), [0]] = inertiaMatrix @ accAng + skewMatrix(velAng) @ inertiaMatrix @ velAng
+                cartesianForces[6 * j:6 * j + 3, [0]] = mass * (accLin - grav)
+                cartesianForces[(6 * j + 3):(6 * j + 6), [0]] = inertiaMatrix @ accAng + skewMatrix(
+                    velAng) @ inertiaMatrix @ velAng
 
             # todo: add external forces
 
@@ -154,10 +158,13 @@ class Chain:
                 jacobian[6 * j:6 * j + 6, :] = self.Points[j].jacobianMatrix
 
             # calculate transposed jacobian and forces product
-            desJointTorque[:,[i]] = jacobian.T @ cartesianForces
+            desJointTorque[:, [i]] = jacobian.T @ cartesianForces
 
-        return desJointTorque
+            desMotorTorque = np.zeros(np.shape(desJointTorque))
+            desMotorTorque[0, :] = desJointTorque[0, :] / 20
+            desMotorTorque[1, :] = -desJointTorque[1, :] / 20
 
+        return desJointTorque, desMotorTorque
 
 
 def skewMatrix(vector):
