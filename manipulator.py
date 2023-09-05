@@ -55,9 +55,9 @@ class Manipulator:
 
     async def moteus_set_pos(self, desMotorPos, desMotorTorque):
 
-        state1 = await self.c1.set_position(position=desMotorPos[0], feedforward_torque=0,
+        state1 = await self.c1.set_position(position=desMotorPos[0], feedforward_torque=desMotorTorque[0],
                                             maximum_torque=0.3, query=True)
-        state2 = await self.c2.set_position(position=desMotorPos[1], feedforward_torque=0,
+        state2 = await self.c2.set_position(position=desMotorPos[1], feedforward_torque=desMotorTorque[1],
                                             maximum_torque=0.3, query=True)
 
         currentMotorPos = np.array(
