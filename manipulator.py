@@ -90,7 +90,8 @@ class Manipulator:
         for i in range(n):
             # prepare data to send
             desMotorPos = self.desMotorTrajectoryPos[:, i]
-            desMotorTorque = self.desJointTrajectoryTorque[:, i]/20  # todo: include joint ratios
+            #desMotorTorque = self.desJointTrajectoryTorque[:, i]/20  # todo: include joint ratios
+            desMotorTorque = desMotorPos * 0
 
             # set position and read telemetry
             currentMotorPos, currentMotorTorque = await self.moteus_set_pos(desMotorPos, desMotorTorque)
